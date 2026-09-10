@@ -199,6 +199,7 @@ async def search_audible_books(
             for b in books
             if any(query_lower in author.lower() for author in b.authors)
         ]
+        books.sort(key=lambda book: book.release_date, reverse=True)
 
     logger.debug(
         "Search results fetched",

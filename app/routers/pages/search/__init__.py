@@ -1,12 +1,13 @@
 from typing import Annotated
+from urllib.parse import quote_plus
 
 from aiohttp import ClientSession
-from fastapi import APIRouter, Depends, Query, Security
-from sqlmodel import Session
+from fastapi import APIRouter, Depends, Form, Query, Security
+from sqlmodel import Session, col, select
 
 from app.internal.audible.types import audible_region_type, get_region_from_settings
 from app.internal.auth.authentication import ABRAuth, DetailedUser
-from app.internal.models import GroupEnum
+from app.internal.models import FavoriteAuthor, GroupEnum
 from app.internal.prowlarr.util import prowlarr_config
 from app.internal.ranking.quality import quality_config
 from app.routers.api.search import search_books
@@ -14,6 +15,7 @@ from app.routers.api.search import search_suggestions as api_search_suggestions
 from app.util.connection import get_connection
 from app.util.db import get_session
 from app.util.log import logger
+from app.util.redirect import BaseUrlRedirectResponse
 from app.util.templates import catalog_response
 from app.util.toast import ToastException
 
@@ -62,6 +64,16 @@ async def read_search(
             auto_start_download=quality_config.get_auto_download(session)
             and user.is_above(GroupEnum.trusted),
             prowlarr_configured=prowlarr_configured,
+            is_favorite=bool(
+                query
+                and search_type == "author"
+                and session.exec(
+                    select(FavoriteAuthor).where(
+                        col(FavoriteAuthor.user_username) == user.username,
+                        col(FavoriteAuthor.author) == query,
+                    )
+                ).first()
+            ),
         )
 
     except Exception as e:
@@ -70,6 +82,27 @@ async def read_search(
         raise ToastException(
             "An error occurred while searching for books. Please try again later."
         ) from e
+
+
+@router.post("/favorite-author")
+async def favorite_author(
+    author: Annotated[str, Form()],
+    session: Annotated[Session, Depends(get_session)],
+    user: Annotated[DetailedUser, Security(ABRAuth())],
+):
+    author = author.strip()
+    if (
+        author
+        and not session.exec(
+            select(FavoriteAuthor).where(
+                col(FavoriteAuthor.user_username) == user.username,
+                col(FavoriteAuthor.author) == author,
+            )
+        ).first()
+    ):
+        session.add(FavoriteAuthor(user_username=user.username, author=author))
+        session.commit()
+    return BaseUrlRedirectResponse(f"/search?q={quote_plus(author)}&search_type=author")
 
 
 @router.get("/hx-suggestions")
